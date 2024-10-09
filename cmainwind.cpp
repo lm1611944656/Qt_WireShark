@@ -180,6 +180,157 @@ void CMainWind::onComboBoxChanged(int index)
     return;
 }
 
+/*
+ * 开始捕获来自卡的数据包
+ * 数据链路层的数据包必须符合 IEEE 802.3 协议
+ * 否则将被丢弃
+*/
+int CMainWind::capture(){
+    // 打开网络接口
+    if(m_currDevice)
+        /*
+         * 获取网络的句柄(类似于文件描述符)
+         * m_currDevice->name：你要打开的设备名称，表示需要捕获网络流量的接口。
+         * 65536：表示捕获包的最大字节数，基本上足够捕获完整的以太网数据帧。
+         * 1：启用混杂模式，可以捕获经过接口的所有流量。
+         * 1000：捕获的超时时间设置为 1 秒。
+         * errbuf：用于存储错误信息的缓冲区。*/
+        pointer = pcap_open_live(m_currDevice->name, 65536, 1, 1000, errbuf);
+    else{
+        // m_statusBar->showMessage("pls choose Network Card!");
+        return -1;
+    }
+
+    if(!pointer){
+        // m_statusBar->showMessage(errbuf);
+        pcap_freealldevs(m_allDevice);
+        m_currDevice = nullptr;
+        return -1;
+    }else{
+        // check the data link IEEE 802.3
+        if(pcap_datalink(pointer) != DLT_EN10MB){
+            pcap_close(pointer);
+            pcap_freealldevs(m_allDevice);
+            m_currDevice = nullptr;
+            return -1;
+        }
+
+        //m_statusBar->showMessage(m_currDevice->name);
+    }
+    return 0;
+}
+
+void CMainWind::updateStatusBar()
+{
+    // 获取当前时间，格式：yyyy-MM-dd hh:mm:ss
+    QString currentTime = QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss");
+
+    // 计算软件运行时间
+    qint64 elapsed = m_startTime.msecsTo(QDateTime::currentDateTime()) / 1000; // 以秒为单位
+    int hours = elapsed / 3600;
+    int minutes = (elapsed % 3600) / 60;
+    int seconds = elapsed % 60;
+    QString runtime = QString("运行时间: %1:%2:%3")
+                          .arg(hours, 2, 10, QChar('0'))
+                          .arg(minutes, 2, 10, QChar('0'))
+                          .arg(seconds, 2, 10, QChar('0'));
+
+    // 更新状态栏信息
+    m_statusBar->showMessage(QString("当前时间: %1 | %2").arg(currentTime, runtime));
+}
+
+void CMainWind::setdataPacketTable(QTableWidget &table)
+{
+    // 设置表格的行高为30
+    table.verticalHeader()->setDefaultSectionSize(30);
+
+    // 显示7列
+    table.setColumnCount(7);
+
+    // 不显示网格
+    table.setShowGrid(false);
+
+    // 不显示垂直表头
+    table.verticalHeader()->setVisible(false);
+
+    m_readOnlyDelegate = new ReadOnlyDelegate();
+
+    // 为表格的某一列设置只读委托，比如第1列
+    //table.setItemDelegateForColumn(1, m_readOnlyDelegate);
+
+    // 为表格设置只读委托
+    table.setItemDelegate(m_readOnlyDelegate);
+
+    QStringList title = {"NO.","Time","Source","Destination","Protocol","Length","Info"};
+
+    // 设置表头
+    table.setHorizontalHeaderLabels(title);
+    table.setColumnWidth(0, 50);
+    table.setColumnWidth(1, 150);
+    table.setColumnWidth(2, 300);
+    table.setColumnWidth(3, 300);
+    table.setColumnWidth(4, 100);
+    table.setColumnWidth(5, 100);
+    table.setColumnWidth(6, 1000);
+
+    // 当用户点击或选择某个单元格时，整行都会被选中，而不是仅仅选择单个单元格。
+    table.setSelectionBehavior(QAbstractItemView::SelectRows);
+}
+
+void CMainWind::handleMessage(DataPackage data) {
+
+
+    if (!m_dataPacketTable) return; // 确保表格已初始化
+
+    // 检查数据有效性
+    if (data.getTimeStamp().isEmpty() || data.getSource().isEmpty()) {
+        qDebug() << "Invalid data package!";
+        return;
+    }
+
+    // 表中插入一行
+    m_dataPacketTable->insertRow(countNumber);
+
+    // 保存数据包
+    this->pData.push_back(data);
+
+    // 获取数据包的类型
+    QString type = data.getPackageType();
+
+
+    QColor color;
+    // show different color
+    if(type == TCP){
+        color = QColor(216,191,216);
+    }else if(type == UDP){
+        color = QColor(144,238,144);
+    }
+    else if(type == ARP){
+        color = QColor(238,238,0);
+    }
+    else if(type == DNS){
+        color = QColor(255,255,224);
+    }else if(type == TLS || type == SSL){
+        color = QColor(210,149,210);
+    }else{
+        color = QColor(255,218,185);
+    }
+
+    m_dataPacketTable->setItem(countNumber,0,new QTableWidgetItem(QString::number(countNumber)));
+    m_dataPacketTable->setItem(countNumber,1,new QTableWidgetItem(data.getTimeStamp()));
+    m_dataPacketTable->setItem(countNumber,2,new QTableWidgetItem(data.getSource()));
+    m_dataPacketTable->setItem(countNumber,3,new QTableWidgetItem(data.getDestination()));
+    m_dataPacketTable->setItem(countNumber,4,new QTableWidgetItem(type));
+    m_dataPacketTable->setItem(countNumber,5,new QTableWidgetItem(data.getDataLength()));
+    m_dataPacketTable->setItem(countNumber,6,new QTableWidgetItem(data.getInfo()));
+
+    // set color
+    for(int i = 0;i < 7;i++){
+        m_dataPacketTable->item(countNumber, i)->setBackground(color);
+    }
+    countNumber++;
+}
+
 void CMainWind::onTableCellClicked(int row, int column)
 {
     if(m_rowNumber == row || row < 0){
@@ -1150,153 +1301,4 @@ void CMainWind::onTableCellClicked(int row, int column)
     }
 }
 
-/*
- * 开始捕获来自卡的数据包
- * 数据链路层的数据包必须符合 IEEE 802.3 协议
- * 否则将被丢弃
-*/
-int CMainWind::capture(){
-    // 打开网络接口
-    if(m_currDevice)
-        /*
-         * 获取网络的句柄(类似于文件描述符)
-         * m_currDevice->name：你要打开的设备名称，表示需要捕获网络流量的接口。
-         * 65536：表示捕获包的最大字节数，基本上足够捕获完整的以太网数据帧。
-         * 1：启用混杂模式，可以捕获经过接口的所有流量。
-         * 1000：捕获的超时时间设置为 1 秒。
-         * errbuf：用于存储错误信息的缓冲区。*/
-        pointer = pcap_open_live(m_currDevice->name, 65536, 1, 1000, errbuf);
-    else{
-        // m_statusBar->showMessage("pls choose Network Card!");
-        return -1;
-    }
 
-    if(!pointer){
-        // m_statusBar->showMessage(errbuf);
-        pcap_freealldevs(m_allDevice);
-        m_currDevice = nullptr;
-        return -1;
-    }else{
-        // check the data link IEEE 802.3
-        if(pcap_datalink(pointer) != DLT_EN10MB){
-            pcap_close(pointer);
-            pcap_freealldevs(m_allDevice);
-            m_currDevice = nullptr;
-            return -1;
-        }
-
-        //m_statusBar->showMessage(m_currDevice->name);
-    }
-    return 0;
-}
-
-void CMainWind::updateStatusBar()
-{
-    // 获取当前时间，格式：yyyy-MM-dd hh:mm:ss
-    QString currentTime = QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss");
-
-    // 计算软件运行时间
-    qint64 elapsed = m_startTime.msecsTo(QDateTime::currentDateTime()) / 1000; // 以秒为单位
-    int hours = elapsed / 3600;
-    int minutes = (elapsed % 3600) / 60;
-    int seconds = elapsed % 60;
-    QString runtime = QString("运行时间: %1:%2:%3")
-                          .arg(hours, 2, 10, QChar('0'))
-                          .arg(minutes, 2, 10, QChar('0'))
-                          .arg(seconds, 2, 10, QChar('0'));
-
-    // 更新状态栏信息
-    m_statusBar->showMessage(QString("当前时间: %1 | %2").arg(currentTime, runtime));
-}
-
-void CMainWind::setdataPacketTable(QTableWidget &table)
-{
-    // 设置表格的行高为30
-    table.verticalHeader()->setDefaultSectionSize(30);
-
-    // 显示7列
-    table.setColumnCount(7);
-
-    // 不显示网格
-    table.setShowGrid(false);
-
-    // 不显示垂直表头
-    table.verticalHeader()->setVisible(false);
-
-    m_readOnlyDelegate = new ReadOnlyDelegate();
-
-    // 为表格的某一列设置只读委托，比如第1列
-    //table.setItemDelegateForColumn(1, m_readOnlyDelegate);
-
-    // 为表格设置只读委托
-    table.setItemDelegate(m_readOnlyDelegate);
-
-    QStringList title = {"NO.","Time","Source","Destination","Protocol","Length","Info"};
-
-    // 设置表头
-    table.setHorizontalHeaderLabels(title);
-    table.setColumnWidth(0, 50);
-    table.setColumnWidth(1, 150);
-    table.setColumnWidth(2, 300);
-    table.setColumnWidth(3, 300);
-    table.setColumnWidth(4, 100);
-    table.setColumnWidth(5, 100);
-    table.setColumnWidth(6, 1000);
-
-    // 当用户点击或选择某个单元格时，整行都会被选中，而不是仅仅选择单个单元格。
-    table.setSelectionBehavior(QAbstractItemView::SelectRows);
-}
-
-void CMainWind::handleMessage(DataPackage data) {
-
-
-    if (!m_dataPacketTable) return; // 确保表格已初始化
-
-    // 检查数据有效性
-    if (data.getTimeStamp().isEmpty() || data.getSource().isEmpty()) {
-        qDebug() << "Invalid data package!";
-        return;
-    }
-
-    // 表中插入一行
-    m_dataPacketTable->insertRow(countNumber);
-
-    // 保存数据包
-    this->pData.push_back(data);
-
-    // 获取数据包的类型
-    QString type = data.getPackageType();
-
-
-    QColor color;
-    // show different color
-    if(type == TCP){
-        color = QColor(216,191,216);
-    }else if(type == UDP){
-        color = QColor(144,238,144);
-    }
-    else if(type == ARP){
-        color = QColor(238,238,0);
-    }
-    else if(type == DNS){
-        color = QColor(255,255,224);
-    }else if(type == TLS || type == SSL){
-        color = QColor(210,149,210);
-    }else{
-        color = QColor(255,218,185);
-    }
-
-    m_dataPacketTable->setItem(countNumber,0,new QTableWidgetItem(QString::number(countNumber)));
-    m_dataPacketTable->setItem(countNumber,1,new QTableWidgetItem(data.getTimeStamp()));
-    m_dataPacketTable->setItem(countNumber,2,new QTableWidgetItem(data.getSource()));
-    m_dataPacketTable->setItem(countNumber,3,new QTableWidgetItem(data.getDestination()));
-    m_dataPacketTable->setItem(countNumber,4,new QTableWidgetItem(type));
-    m_dataPacketTable->setItem(countNumber,5,new QTableWidgetItem(data.getDataLength()));
-    m_dataPacketTable->setItem(countNumber,6,new QTableWidgetItem(data.getInfo()));
-
-    // set color
-    for(int i = 0;i < 7;i++){
-        m_dataPacketTable->item(countNumber, i)->setBackground(color);
-    }
-    countNumber++;
-}

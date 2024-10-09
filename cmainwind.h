@@ -44,6 +44,7 @@ private:
     void setdataPacketTable(QTableWidget &table);
 
 public slots:
+    // 处理子线程返回的数据包
     void handleMessage(DataPackage data);
 
 private slots:
